@@ -1,47 +1,65 @@
 #!/usr/bin/env python
-# encoding: utf-8
+# -*- coding: utf-8 -*-
 #
-# @Author: José Sánchez-Gallego
-# @Date: Dec 1, 2017
+# @Author: José Sánchez-Gallego (gallegoj@uw.edu)
+# @Date: 2019-07-26
 # @Filename: catalogdb
-# @License: BSD 3-Clause
-# @Copyright: José Sánchez-Gallego
+# @License: BSD 3-clause (http://www.opensource.org/licenses/BSD-3-Clause)
+#
+# @Last modified by: José Sánchez-Gallego (gallegoj@uw.edu)
+# @Last modified time: 2019-07-26 20:14:41
+
+import subprocess
+import urllib.parse
+
+import click
 
 
-from __future__ import division
-from __future__ import print_function
-from __future__ import absolute_import
-from __future__ import unicode_literals
+@click.group()
+def catalogdb():
+    """CLI for catalogdb tools."""
 
-import argparse
-import os
-import sys
+    pass
 
-from catalogdb.main import math
+
+@catalogdb.command()
+@click.argument('REMOTE', type=str)
+@click.argument('LOCAL', type=click.Path(exists=True, file_okay=False))
+@click.option('--mode', type=click.Choice(['wget'], case_sensitive=False),
+              default='wget', show_default=True,
+              help='the mode use to download the data.')
+@click.option('--include', type=str, help='pattern of files to include.')
+@click.option('--extra-options', type=str, default='',
+              help="additional command line options to pass to the command.")
+def download(remote, local, mode, include, extra_options):
+    """Downloads files from a REMOTE to a LOCAL path."""
+
+    parsed_url = urllib.parse.urlparse(remote)
+
+    if mode == 'wget':
+
+        n_cut_dirs = len(parsed_url.path.strip('/').split('/'))
+
+        shell_cmd = ['wget', '-r', '-nH', '--no-parent',
+                     f'--cut-dirs={n_cut_dirs}',
+                     '--reject="index.html*"', '-P', local]
+
+        if include:
+            shell_cmd += ['-A', include]
+
+        shell_cmd += extra_options.split()
+        shell_cmd += [remote]
+
+    command_string = ' '.join(shell_cmd)
+
+    click.echo()
+    click.echo(f'Running command ' + click.style(command_string, fg='green', bold=True))
+    click.echo()
+
+    subprocess.run(command_string, shell=True)
+
+    click.echo()
 
 
 if __name__ == '__main__':
-
-    # An example of how to write a command line parser that works with the
-    # main.math function. For more details on how to use argparse, start with
-    # this tutorial: https://kapeli.com/dash_share?docset_file=Python%203&docset_name=Python%203&path=doc/howto/argparse.html%23id1&platform=python&repo=Main&version=3.6.3
-
-    parser = argparse.ArgumentParser(
-        prog=os.path.basename(sys.argv[0]),
-        description='Performs an arithmetic operation.')
-
-    parser.add_argument('VALUE1', type=float, help='The first operand')
-    parser.add_argument('OPERATOR', type=str, help='The operator [+, -, *, /]')
-    parser.add_argument('VALUE2', type=float, help='The second operand')
-
-    parser.add_argument('-v', '--verbose', action='store_true', default=False,
-                        help='sets verbose mode')
-
-    args = parser.parse_args()
-
-    result = math(args.VALUE1, args.VALUE2, arith_operator=args.OPERATOR)
-
-    if args.verbose:
-        print('{} {} {} = {}'.format(args.VALUE1, args.OPERATOR, args.VALUE2, result))
-    else:
-        print(result)
+    catalogdb()
