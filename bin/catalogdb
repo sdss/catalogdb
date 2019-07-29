@@ -7,7 +7,7 @@
 # @License: BSD 3-clause (http://www.opensource.org/licenses/BSD-3-Clause)
 #
 # @Last modified by: José Sánchez-Gallego (gallegoj@uw.edu)
-# @Last modified time: 2019-07-28 20:00:24
+# @Last modified time: 2019-07-29 12:30:54
 
 import functools
 import multiprocessing
@@ -231,6 +231,68 @@ def copy(conn, table_name, files, schema, multi, jobs, header, sep):
 
     click.echo()
     click.echo(result_msg)
+
+
+@catalogdb.command()
+@click.argument('TABLE_NAME', type=str)
+@click.argument('COLUMNS', nargs=-1, type=str)
+@click.option('--schema', type=str, default='catalogdb',
+              help='the schema to which the table belongs.')
+@click.option('--dry-run', default=False, is_flag=True)
+@click.option('--sql', default=False, is_flag=True,
+              help='prints the SQL statement used to create the indices.')
+@click.option('--q3c', default=False, is_flag=True,
+              help='creates a Q3C index on two columns.')
+@pass_connection
+def index(conn, table_name, columns, schema, dry_run, sql, q3c):
+    """Creates indices on COLUMNS."""
+
+    full_table_name = f'{schema}.{table_name}' if schema else table_name
+
+    if not load.table_exists(conn, table_name, schema=schema):
+        raise RuntimeError(f'table {table_name} does not exist in database.')
+
+    click.echo()
+
+    if q3c:
+        assert len(columns) == 2, 'with --q3c only two columns can be specified.'
+        click.echo('creating ' + click.style('Q3C ', fg='red') +
+                   'index for columns ' + click.style(' and '.join(columns), fg='green'))
+
+        template = """CREATE INDEX CONCURRENTLY ON {0} (q3c_ang2ipix({1}, {2}));
+CLUSTER {3}_q3c_ang2ipix_idx ON {0};
+ANALYZE {0};"""
+
+        index_sql = [template.format(full_table_name, columns[0], columns[1], table_name)]
+
+    else:
+        click.echo('creating ' + click.style('BTREE ', fg='red') +
+                   'index for columns ' + click.style(', '.join(columns), fg='green'))
+
+        template = 'CREATE INDEX CONCURRENTLY ON {} using BTREE ({});'
+        index_sql = [template.format(full_table_name, column) for column in columns]
+
+    if sql:
+
+        click.echo()
+        click.echo(click.style('SQL statement\n', fg='red'))
+        click.echo('\n\n'.join(index_sql))
+
+    if dry_run:
+        return
+
+    conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    click.echo()
+    click.echo(click.style('Running commands', fg='red'))
+    click.echo()
+
+    for statement in index_sql:
+        for line in statement.split('\n'):
+            click.echo(line.strip())
+            cursor.execute(line)
+            # conn.commit()
 
 
 if __name__ == '__main__':
