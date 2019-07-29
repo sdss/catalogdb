@@ -7,12 +7,49 @@
 # @License: BSD 3-clause (http://www.opensource.org/licenses/BSD-3-Clause)
 #
 # @Last modified by: José Sánchez-Gallego (gallegoj@uw.edu)
-# @Last modified time: 2019-07-26 20:14:41
+# @Last modified time: 2019-07-28 20:00:24
 
+import functools
+import multiprocessing
 import subprocess
 import urllib.parse
+from functools import update_wrapper
 
 import click
+import tqdm
+import psycopg2
+
+from catalogdb import load
+
+
+DBNAME_DEFAULT = 'sdss5db'
+DBUSER_DEFAULT = 'sdss'
+DBHOST_DEFAULT = 'sdssadmin.wasatch.peaks'
+
+
+def pass_connection(f):
+    """Passes a database connection as the first argument."""
+
+    @click.option('-d', '--database', help='the database name.',
+                  default=DBNAME_DEFAULT, metavar='<db>', show_default=True)
+    @click.option('-u', '--user', help='the database user.',
+                  default=DBUSER_DEFAULT, metavar='<user>', show_default=True)
+    @click.option('-h', '--host', help='the PostgreSQL server host.',
+                  default=DBHOST_DEFAULT, metavar='<host>', show_default=True)
+    @click.option('-p', '--port', help='the PostgreSQL server port.',
+                  default=5432, metavar='<port>', show_default=True)
+    @click.pass_context
+    def pass_connection(ctx, database, user, host, port, *args, **kwargs):
+
+        try:
+            conn = load.get_connection(database, user, host, port)
+        except psycopg2.OperationalError:
+            click.echo(click.style('\nInvalid connection parameters.\n', fg='red'))
+            raise
+
+        return ctx.invoke(f, conn, *args, **kwargs)
+
+    return update_wrapper(pass_connection, f)
 
 
 @click.group()
@@ -59,6 +96,141 @@ def download(remote, local, mode, include, extra_options):
     subprocess.run(command_string, shell=True)
 
     click.echo()
+
+
+@catalogdb.command()
+@click.argument('TABLE_NAME', type=str)
+@click.option('--columns', type=click.Path(exists=True, dir_okay=False),
+              help='a file with format COLUMN_NAME TYPE [EXTRA_PARAMETERS]. '
+                   'If not passed, a table without columns will be created.')
+@click.option('--schema', type=str, default='catalogdb',
+              help='the schema in which to create the table.')
+@click.option('--dry-run', default=False, is_flag=True)
+@click.option('--sql', default=False, is_flag=True,
+              help='prints the SQL statement used to create the table.')
+@click.option('--primary', type=str, default=None,
+              help='sets the column as primary key.')
+@click.option('--drop', default=False, is_flag=True,
+              help='if the table exists, drops it before recreating it.')
+@pass_connection
+def create_table(conn, table_name, columns, schema, dry_run, sql, drop, primary):
+    """Creates a table from a FILE containing the column definition."""
+
+    cur = conn.cursor()
+
+    full_table_name = schema + '.' + table_name if schema else table_name
+
+    create_sql = f'CREATE TABLE {full_table_name} ('
+
+    if columns:
+        create_sql += '\n'
+        columns = load.read_table_definition(columns)
+        for idx in range(len(columns)):
+            sep = '' if idx == len(columns) - 1 else ','
+            column_name, *rest = columns[idx].split()
+            rest_upper = ' '.join(map(lambda xx: xx.upper(), rest))
+
+            if primary and column_name.upper() == primary.upper():
+                if 'PRIMARY' not in rest_upper:
+                    rest_upper += ' PRIMARY KEY'
+
+            create_sql += f'    {column_name} {rest_upper}{sep}\n'
+
+    create_sql += ');'
+
+    if drop:
+
+        table_exists = load.table_exists(conn, table_name, schema=schema)
+
+        click.echo()
+
+        if not table_exists:
+            click.echo(f'Table {full_table_name} ', nl=False)
+            click.echo(click.style('does not ', fg='red'), nl=False)
+            click.echo('exist. Not dropping it.')
+        else:
+            click.echo(click.style('Dropping table ', fg='red') +
+                       click.style(full_table_name, fg='green'))
+
+            if not dry_run:
+                cur.execute(f'drop table {full_table_name}')
+
+    if sql:
+        click.echo()
+        click.echo(click.style('SQL statement\n', fg='red'))
+        click.echo(create_sql)
+
+    if dry_run:
+        conn.commit()
+        return
+
+    cur.execute(create_sql.replace('\n', ''))
+    conn.commit()
+
+    click.echo()
+    click.echo(click.style(f'Table {full_table_name} successfully created.',
+                           fg='green'))
+
+
+@catalogdb.command()
+@click.argument('TABLE_NAME', type=str)
+@click.argument('FILES', nargs=-1, type=click.Path(exists=True, dir_okay=False))
+@click.option('--schema', type=str, default='catalogdb',
+              help='the schema to which the table belongs.')
+@click.option('--multi', is_flag=True,
+              help='copy files as multiple processes.')
+@click.option('--jobs', type=int, default=-1,
+              help='number of jobs to use when copying files in parallel. '
+                   'If --jobs is set, --parallel is assumed.')
+@click.option('--header', is_flag=True,
+              help='indicates that the files contain a header as the first line.')
+@click.option('--sep', type=str, default=',',
+              help='the separator between column values.')
+@pass_connection
+def copy(conn, table_name, files, schema, multi, jobs, header, sep):
+    """Copy data from a list of CSV files. Supports gzip compressed files."""
+
+    if not load.table_exists(conn, table_name, schema=schema):
+        raise RuntimeError(f'table {table_name} does not exist in database.')
+
+    full_table_name = f'{schema}.{table_name}' if schema else table_name
+
+    click.echo()
+    click.echo(f'Loading {len(files)} files to ' + click.style(full_table_name, fg='red'))
+
+    # Multiprocessing uses pickling which psycopg2 does not support so we
+    # send the connection parameters so each child can get its own connection.
+    partial_load = functools.partial(load.copy_csv, conn.get_dsn_parameters(),
+                                     table_name, schema=schema, sep=sep,
+                                     header=header)
+
+    if multi or jobs >= 0:
+
+        if jobs <= 0:
+            jobs = multiprocessing.cpu_count()
+
+        pool = multiprocessing.Pool(jobs)
+        iterator = pool.imap(partial_load, files)
+
+    else:
+
+        iterator = map(partial_load, files)
+
+    click.echo()
+
+    results = []
+    with tqdm.tqdm(iterator, total=len(files)) as bar:
+        for result in bar:
+            results.append(result)
+
+    if all(results):
+        result_msg = click.style('All files were successfully copied.', fg='green')
+    else:
+        failed = sum([not result for result in results])
+        result_msg = click.style(f'{failed} files failed to copy.', fg='red')
+
+    click.echo()
+    click.echo(result_msg)
 
 
 if __name__ == '__main__':
