@@ -1,21 +1,23 @@
-.. role:: header_no_toc
-  :class: class_header_no_toc
 
-.. title:: Welcome to catalogdb's documentation!
+catalogdb's documentation
+=============================================
 
-:tocdepth: 2
+This is the documentation for the SDSS Python product catalogdb. The current version is |catalogdb_version|. You can install the package by doing
 
-.. rubric:: :header_no_toc:`Welcome to catalogdb's documentation!`
+.. code-block:: console
 
-This is the Sphinx documentation for the SDSS Python product catalogdb
+  $ pip install sdss-catalogdb
 
-Introduction
-------------
 
-A description of the package can go here.
+Contents
+--------
 
-* :ref:`What's new in catalogdb? <changelog>`
-* :ref:`Introduction to catalogdb <intro>`
+.. toctree::
+  :maxdepth: 2
+
+  What's new in catalogdb? <CHANGELOG>
+  Introduction to catalogdb <intro>
+
 
 Reference
 ---------
@@ -27,7 +29,7 @@ Reference
 
 
 Indices and tables
-==================
+------------------
 
 * :ref:`genindex`
 * :ref:`modindex`

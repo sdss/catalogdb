@@ -1,12 +1,16 @@
 # encoding: utf-8
-# flake8: noqa
 
-from .utils.logger import get_logger
+from sdsstools import get_config, get_logger, get_package_version
 
 
-NAME = 'catalogdb'
+NAME = 'sdss-catalogdb'
 
+# Loads config
+config = get_config(NAME)
+
+# Inits the logging system. Only shell logging, and exception and warning catching.
+# File logging can be started by calling log.start_file_logger(path).
 log = get_logger(NAME)
 
 
-__version__ = '0.1.0dev'
+__version__ = get_package_version(path=__file__, package_name=NAME)
